@@ -1,0 +1,57 @@
+{
+  "name": "@ocero/ujn-deepseek-webapi-node",
+  "version": "1.0.1",
+  "description": "UJN (济南大学) DeepSeek WebAPI —— OpenAI 兼容直通代理 + Anthropic Messages 兼容端点（Node.js，发布包为编译后 JS，可 npx/全局使用）",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "ujn-serve": "bin/ujn-serve",
+    "ujn-chat": "bin/ujn-chat"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "ujn",
+    "deepseek",
+    "openai",
+    "anthropic",
+    "proxy",
+    "webvpn",
+    "chatujn"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/warma16/UJN_ChatUJN-webapi.git"
+  },
+  "homepage": "https://github.com/warma16/UJN_ChatUJN-webapi",
+  "bugs": {
+    "url": "https://github.com/warma16/UJN_ChatUJN-webapi/issues"
+  },
+  "author": "warma16 <metalstudio@126.com>",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
+    "start": "node src/server.ts",
+    "cli": "node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run-tests.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

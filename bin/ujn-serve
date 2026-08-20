@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+/**
+ * UJN OpenAI / Anthropic 兼容 API 服务 —— npm/npx 入口。
+ * 支持 --host/--port 与 -u/-p 凭据（透传给 server.ts）。
+ * 示例：npx ujn-serve -u 2021001234 -p ******** --port 8000
+ */
+import("../dist/server.js")
+  .then((mod) => mod.main())
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });

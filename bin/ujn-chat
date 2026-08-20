@@ -1,0 +1,9 @@
+#!/usr/bin/env node
+/**
+ * UJN Chat CLI —— npm/npx 入口。
+ * 引入即运行（cli.ts 顶端 main() 会拉起服务并进入流式对话/登录流程）。
+ */
+import("../dist/cli.js").catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
