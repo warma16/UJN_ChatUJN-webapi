@@ -12,6 +12,7 @@
  */
 
 import express, { type Request, type Response, type NextFunction } from "express";
+import { Agent as UndiciAgent, setGlobalDispatcher } from "undici";
 import * as fs from "node:fs";
 
 import { defaultWrap, AuthRequiredError, type UJNWrap } from "./wrap.ts";
@@ -400,6 +401,27 @@ function rewriteSseFrame(frame: string): string {
 // ---------- Express 应用 ----------
 
 const app = express();
+
+// ---- 转发性能优化 ----
+// 1) 客户端侧：关掉 Nagle（TCP_NODELAY）。SSE 帧普遍只有几十~几百字节，
+//    Windows 上 Nagle + 延迟 ACK 交互会把小帧攒批，增加 40~200ms 级别的停顿，
+//    直接表现为「吐字一卡一卡、体感 tokens/s 偏低」。关掉后每个帧立即发出。
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.socket?.setNoDelay(true);
+  next();
+});
+
+// 2) 上游侧：调长 undici 连接池的 keep-alive 空闲窗口（默认仅 4s）。
+//    WebVPN 的 TLS 握手要几百毫秒；连接被过早回收后，每个新请求都要重新握手，
+//    全部砸在首 token 延迟（TTFT）上。这里让空闲连接存活 55s，热路径直接复用。
+setGlobalDispatcher(
+  new UndiciAgent({
+    connections: 128,
+    keepAliveTimeout: 55_000,
+    keepAliveMaxTimeout: 600_000,
+  }),
+);
+
 app.use(express.json({ limit: "50mb" }));
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
