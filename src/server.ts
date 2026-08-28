@@ -754,6 +754,10 @@ export async function main(): Promise<void> {
   app.listen(PORT, HOST, () => {
     console.log(`[Server] UJN API 服务已启动: http://${HOST}:${PORT} (OpenAI 兼容)`);
   });
+
+  // 后台预热：主动校验磁盘会话（过期则立即自愈重登）+ 探测内网直连原站。
+  // 不阻塞监听；预热失败不影响服务，首个请求时仍有兜底自愈。
+  void defaultWrap.startupWarmup();
 }
 
 // 直接运行时启动（被 import 时不自动启动）

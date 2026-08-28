@@ -108,6 +108,8 @@ export class UJNWrap {
   sessionFromDisk = false;
   /** 进行中的登录 Promise（并发去重，避免网络抖动引发登录风暴）。 */
   private loginInFlight: Promise<boolean> | null = null;
+  /** 直连原站 host（内网探测通过后启用，跳过 WebVPN 少一跳代理；null = 走 WebVPN）。运行中连接异常自动降级回退。 */
+  private directHost: string | null = null;
 
   constructor(opts: UJNWrapOptions = {}) {
     this.cookiesFile = opts.cookiesFile ?? cfg.COOKIES_FILE;
@@ -208,7 +210,51 @@ export class UJNWrap {
   }
 
   private backendUrl(path: string): string {
+    // 直连模式：校园网内可达原站时跳过 WebVPN（省一次 TLS 代理转发，延迟更低）
+    if (this.directHost) return `https://${this.directHost}${path}`;
     return `${cfg.VPN_BASE}/https/${cfg.CHAT_HOST_WEBVPN}${path}`;
+  }
+
+  /**
+   * 启动预热（后台异步执行，不阻塞服务监听）：
+   *  1. 会话预检——磁盘恢复的会话可能已过期，这里主动探测并自愈（复用 request 的重登逻辑），
+   *     把「过期检测 + 完整重登」的 3~5s 惩罚从首个用户请求挪到启动阶段；
+   *  2. 直连探测——内网可达原站时切换直连，公网环境探测失败自动保持 WebVPN。
+   */
+  async startupWarmup(): Promise<void> {
+    if (this.authenticated && this.sessionFromDisk) {
+      try {
+        await this.request("GET", "/api/models", { timeoutMs: 10_000 });
+        console.log("[UJN] 会话预检通过");
+      } catch (e: any) {
+        console.log(`[UJN] 会话预检未通过（${e.message}），首个请求时将自动重登自愈`);
+      }
+    }
+    await this.probeDirectMode();
+  }
+
+  /** 探测能否直连原站（Bearer token 认证，不经 WebVPN）。可用 UJN_DIRECT_HOST 环境变量覆盖默认候选。 */
+  private async probeDirectMode(): Promise<void> {
+    const candidates = process.env.UJN_DIRECT_HOST
+      ? [process.env.UJN_DIRECT_HOST]
+      : ["chat.ujn.edu.cn"];
+    for (const host of candidates) {
+      try {
+        const resp = await fetch(`https://${host}/api/models`, {
+          headers: { ...this.authHeaders() },
+          signal: AbortSignal.timeout(4000),
+        });
+        const ct = resp.headers.get("content-type") ?? "";
+        if (resp.ok && ct.includes("json")) {
+          this.directHost = host;
+          console.log(`[UJN] 直连原站可用：https://${host}（跳过 WebVPN，延迟更低）`);
+          return;
+        }
+      } catch {
+        // 探测失败，尝试下一个候选
+      }
+    }
+    console.log("[UJN] 直连原站不可达（公网环境属正常），继续走 WebVPN");
   }
 
   /**
@@ -249,6 +295,12 @@ export class UJNWrap {
         const detail = describeFetchError(e);
         console.log(`[UJN] 网络异常（第 ${attempt + 1}/${maxAttempts} 次）：${detail}`);
         const timeout = isTimeoutError(e);
+        // 直连模式下连接层异常：优先降级回 WebVPN 重试（离开内网/网络切换时自愈）
+        if (this.directHost && !timeout) {
+          console.log(`[UJN] 直连 ${this.directHost} 异常，降级回 WebVPN 重试`);
+          this.directHost = null;
+          continue;
+        }
         // 磁盘恢复的旧会话 + 连接层异常：很可能是会话过期被 WebVPN 断连/踢回登录页 → 先重登自愈
         if (attempt === 0 && !timeout && this.username && this.password && this.sessionFromDisk) {
           console.log("[UJN] 疑似登录态过期，尝试重新登录后重试 ...");
@@ -265,7 +317,7 @@ export class UJNWrap {
 
       const ct = resp.headers.get("Content-Type") ?? "";
       let authFailed = false;
-      if (resp.status === 403 || ((resp.status === 200 || resp.status === 404) && ct.includes("text/html"))) {
+      if (resp.status === 401 || resp.status === 403 || ((resp.status === 200 || resp.status === 404) && ct.includes("text/html"))) {
         const head = (await resp.text()).slice(0, 2000);
         if (resp.status === 403 && head.includes("Not authenticated")) authFailed = true;
         if (ct.includes("text/html") && (head.includes("wengine") || head.includes("loginForm"))) authFailed = true;
