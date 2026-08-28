@@ -6,11 +6,13 @@ dist/
 
 # 登录态 / 凭据 / 敏感数据（切勿提交！）
 ujn_cookies.json
+ujn_session.json
 .ujn_models.json
 
 # 按需求忽略 lockfile
 package-lock.json
 
 # 其它
+term/
 *.log
 .DS_Store

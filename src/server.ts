@@ -687,8 +687,9 @@ async function warmModelCache(): Promise<void> {
         refreshModelCache(latest.data);
       }
     })
-    .catch(() => {
-      /* 刷新失败不影响启动，回落磁盘/兜底表 */
+    .catch((e) => {
+      // 刷新失败不影响启动，回落磁盘/兜底表；但把原因打出来便于诊断
+      console.log(`[UJN] 后台刷新模型列表失败：${(e as Error)?.message ?? e}`);
     });
 }
 

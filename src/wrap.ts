@@ -64,6 +64,29 @@ function wrapResponse(resp: Response): UpstreamResponse {
   };
 }
 
+/**
+ * 把 fetch 异常连同 cause 链展开成完整可读描述。
+ * Node 的 "fetch failed" 只是笼统包装，真实原因（ECONNRESET/ETIMEDOUT/TLS 等）在 e.cause 里。
+ */
+function describeFetchError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const parts: string[] = [`${e.name}: ${e.message}`];
+  let c = (e as any).cause;
+  let i = 0;
+  while (c && i < 4) {
+    const cc = c as Record<string, unknown>;
+    parts.push(`${String(cc.code ?? cc.name ?? "error")}: ${String(cc.message ?? c)}`);
+    c = (cc as any).cause;
+    i++;
+  }
+  return parts.join(" <- ");
+}
+
+/** 是否为连接层超时（AbortSignal.timeout 触发）。 */
+function isTimeoutError(e: any): boolean {
+  return e?.name === "TimeoutError" || e?.name === "AbortError";
+}
+
 export interface UJNWrapOptions {
   cookiesFile?: string;
   username?: string;
@@ -81,6 +104,10 @@ export class UJNWrap {
   token: string | null = null;
   tokenType = "Bearer";
   authenticated = false;
+  /** 当前会话是否来自磁盘恢复（可能已过期；网络异常时优先触发重登自愈）。 */
+  sessionFromDisk = false;
+  /** 进行中的登录 Promise（并发去重，避免网络抖动引发登录风暴）。 */
+  private loginInFlight: Promise<boolean> | null = null;
 
   constructor(opts: UJNWrapOptions = {}) {
     this.cookiesFile = opts.cookiesFile ?? cfg.COOKIES_FILE;
@@ -104,6 +131,7 @@ export class UJNWrap {
         this.token = data.token ?? null;
         this.tokenType = data.token_type ?? "Bearer";
         this.authenticated = true;
+        this.sessionFromDisk = true; // 磁盘恢复的会话可能已过期
         return true;
       }
     } catch (e: any) {
@@ -126,8 +154,16 @@ export class UJNWrap {
     console.log(`[UJN] 登录态已保存到 ${this.cookiesFile}`);
   }
 
-  /** 执行双层登录（WebVPN + LDAP），成功后保存认证态。 */
+  /** 执行双层登录（WebVPN + LDAP），成功后保存认证态。并发调用自动去重。 */
   async login(username?: string, password?: string): Promise<boolean> {
+    if (this.loginInFlight) return this.loginInFlight;
+    this.loginInFlight = this.doLogin(username, password).finally(() => {
+      this.loginInFlight = null;
+    });
+    return this.loginInFlight;
+  }
+
+  private async doLogin(username?: string, password?: string): Promise<boolean> {
     try {
       const result = username && password
         ? await loginMod.login(username, password)
@@ -136,6 +172,7 @@ export class UJNWrap {
       this.token = result.token;
       this.tokenType = result.tokenType;
       this.authenticated = true;
+      this.sessionFromDisk = false; // 全新登录的会话
       await this.saveCookies();
       return true;
     } catch (e: any) {
@@ -188,7 +225,8 @@ export class UJNWrap {
   ): Promise<UpstreamResponse> {
     const { jsonBody, stream = false, timeoutMs = 60000 } = opts;
     const errMsg = "[UJN] 会话未认证/已失效，请重新登录";
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       // 已认证则直接返回；未认证且配置了凭据则自动重登
       const jar = await this.ensureSession(this.username, this.password);
       const headers = this.authHeaders();
@@ -208,7 +246,21 @@ export class UJNWrap {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (e: any) {
-        throw new UpstreamError(`[UJN] 请求失败：${e.message}`);
+        const detail = describeFetchError(e);
+        console.log(`[UJN] 网络异常（第 ${attempt + 1}/${maxAttempts} 次）：${detail}`);
+        const timeout = isTimeoutError(e);
+        // 磁盘恢复的旧会话 + 连接层异常：很可能是会话过期被 WebVPN 断连/踢回登录页 → 先重登自愈
+        if (attempt === 0 && !timeout && this.username && this.password && this.sessionFromDisk) {
+          console.log("[UJN] 疑似登录态过期，尝试重新登录后重试 ...");
+          this.authenticated = false;
+          if (await this.login(this.username, this.password)) continue;
+        }
+        // 超时不重试（重试大概率仍超时且成倍拖长请求）；连接层错误退避后重试
+        if (!timeout && attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 300 : 1000));
+          continue;
+        }
+        throw new UpstreamError(`[UJN] 请求失败：${detail}`, timeout ? 504 : 502);
       }
 
       const ct = resp.headers.get("Content-Type") ?? "";
@@ -287,10 +339,14 @@ export class UJNWrap {
             void this.writeModelsToDisk(value); // 异步落盘，不阻塞返回
             return value;
           } catch {
+            console.log("[UJN] 刷新模型列表：上游响应解析失败，回退缓存");
             return this.fallbackModels(); // 解析失败回退（内存 → 磁盘）
           }
         })
-        .catch(() => this.fallbackModels()) // 网络失败同样回退
+        .catch((e: any) => {
+          console.log(`[UJN] 刷新模型列表失败：${e?.message ?? e}，回退缓存`);
+          return this.fallbackModels(); // 网络失败同样回退
+        })
         .finally(() => {
           listModelsInFlight = null; // 释放，下次调用可重新触发刷新
         });

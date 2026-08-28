@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "@ocero/ujn-deepseek-webapi-node",
-  "version": "1.0.2",
-  "description": "UJN (济南大学) DeepSeek WebAPI —— OpenAI 兼容直通代理 + Anthropic Messages 兼容端点（Node.js，发布包为编译后 JS，可 npx/全局使用）",
+  "version": "1.0.3",
+  "description": "UJN (娴庡崡澶у) DeepSeek WebAPI 鈥斺€?OpenAI 鍏煎鐩撮€氫唬鐞?+ Anthropic Messages 鍏煎绔偣锛圢ode.js锛屽彂甯冨寘涓虹紪璇戝悗 JS锛屽彲 npx/鍏ㄥ眬浣跨敤锛?,
   "type": "module",
   "main": "dist/server.js",
   "bin": {
